@@ -1,7 +1,5 @@
 // === INTERCOM ESP32-A ===
-// Rôle : Crée un hotspot Wi-Fi + audio bidirectionnel + gestion LEDs batterie
-// Micro : INMP441 | Ampli : MAX98357A
-// LEDs : Wi-Fi (GPIO 15), Batterie (GPIO 5, 4, 2)
+// Yedikardes Cem
 
 #include <WiFi.h>
 #include <WiFiUdp.h>
