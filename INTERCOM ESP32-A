@@ -1,0 +1,127 @@
+// === INTERCOM ESP32-A ===
+// Rôle : Crée un hotspot Wi-Fi + audio bidirectionnel + gestion LEDs batterie
+// Micro : INMP441 | Ampli : MAX98357A
+// LEDs : Wi-Fi (GPIO 15), Batterie (GPIO 5, 4, 2)
+
+#include <WiFi.h>
+#include <WiFiUdp.h>
+#include <driver/i2s.h>
+
+// === Wi-Fi Hotspot ===
+const char* ssid = "IntercomESP";
+const char* password = "12345678";
+IPAddress local_ip(192, 168, 4, 1);
+IPAddress gateway(192, 168, 4, 1);
+IPAddress subnet(255, 255, 255, 0);
+
+WiFiUDP udp;
+const int port = 1234;
+const char* remoteIP = "192.168.4.2"; // client ESP32-B
+
+// === I2S (audio) ===
+#define I2S_MIC_SCK 18
+#define I2S_MIC_WS  19
+#define I2S_MIC_SD  21
+#define I2S_SPK_BCLK 18
+#define I2S_SPK_LRC  19
+#define I2S_SPK_DOUT 23
+
+// === LEDs ===
+#define LED_WIFI 15
+#define LED_LOW 5
+#define LED_MED 4
+#define LED_HIGH 2
+
+// === Batterie ===
+#define BAT_PIN 35
+float readBatteryVoltage() {
+  int raw = analogRead(BAT_PIN);
+  float voltage = raw * (3.3 / 4095.0) * 2.0;
+  return voltage;
+}
+
+void updateBatteryLEDs(float voltage) {
+  digitalWrite(LED_LOW, LOW);
+  digitalWrite(LED_MED, LOW);
+  digitalWrite(LED_HIGH, LOW);
+  if (voltage < 3.5) {
+    digitalWrite(LED_LOW, HIGH);
+  } else if (voltage < 3.8) {
+    digitalWrite(LED_LOW, HIGH);
+    digitalWrite(LED_MED, HIGH);
+  } else {
+    digitalWrite(LED_LOW, HIGH);
+    digitalWrite(LED_MED, HIGH);
+    digitalWrite(LED_HIGH, HIGH);
+  }
+}
+
+void setupI2S() {
+  i2s_config_t config = {
+    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX),
+    .sample_rate = 16000,
+    .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+    .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+    .communication_format = I2S_COMM_FORMAT_I2S,
+    .intr_alloc_flags = 0,
+    .dma_buf_count = 8,
+    .dma_buf_len = 64,
+    .use_apll = false,
+    .tx_desc_auto_clear = true
+  };
+
+  i2s_pin_config_t pins = {
+    .bck_io_num = I2S_MIC_SCK,
+    .ws_io_num  = I2S_MIC_WS,
+    .data_out_num = I2S_SPK_DOUT,
+    .data_in_num  = I2S_MIC_SD
+  };
+
+  i2s_driver_install(I2S_NUM_0, &config, 0, NULL);
+  i2s_set_pin(I2S_NUM_0, &pins);
+  i2s_set_clk(I2S_NUM_0, 16000, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_MONO);
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(LED_WIFI, OUTPUT);
+  pinMode(LED_LOW, OUTPUT);
+  pinMode(LED_MED, OUTPUT);
+  pinMode(LED_HIGH, OUTPUT);
+  pinMode(BAT_PIN, INPUT);
+
+  WiFi.softAPConfig(local_ip, gateway, subnet);
+  WiFi.softAP(ssid, password);
+  Serial.println("Hotspot actif : IntercomESP");
+  Serial.println(WiFi.softAPIP());
+
+  digitalWrite(LED_WIFI, HIGH);
+
+  udp.begin(port);
+  setupI2S();
+}
+
+void loop() {
+  const int bufferSize = 512;
+  static char buffer[bufferSize];
+  size_t bytesRead = 0;
+
+  i2s_read(I2S_NUM_0, &buffer, bufferSize, &bytesRead, portMAX_DELAY);
+
+  udp.beginPacket(remoteIP, port);
+  udp.write((uint8_t*)buffer, bytesRead);
+  udp.endPacket();
+
+  int packetSize = udp.parsePacket();
+  if (packetSize) {
+    udp.read(buffer, bufferSize);
+    size_t bytesWritten;
+    i2s_write(I2S_NUM_0, buffer, packetSize, &bytesWritten, portMAX_DELAY);
+  }
+
+  float voltage = readBatteryVoltage();
+  updateBatteryLEDs(voltage);
+
+  delay(100);
+} 
